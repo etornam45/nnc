@@ -164,13 +164,27 @@ impl CCodeGen {
             
             let mut shape_vals = vec![1];
              if let Some(tensor) = graph.tensors.get(original_name) {
-                 shape_vals = tensor.shape.dims.iter().map(|d| d.unwrap_or(1) as i32).collect();
+                shape_vals = tensor
+                    .shape
+                    .dims
+                    .iter()
+                    .map(|d| d.unwrap_or(1) as i32)
+                    .collect();
              }
              
-             let shape_str = shape_vals.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(", ");
+            let shape_str = shape_vals
+                .iter()
+                .map(|v| v.to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
              self.emit(&format!("int {}_shape[] = {{{}}};", input_clean, shape_str));
              self.emit(&format!("Tensor {};", input_clean));
-             self.emit(&format!("init_tensor(&{}, {}, {}_shape);", input_clean, shape_vals.len(), input_clean));
+            self.emit(&format!(
+                "init_tensor(&{}, {}, {}_shape);",
+                input_clean,
+                shape_vals.len(),
+                input_clean
+            ));
              
              // Fill data based on mode
              if self.mode == CodeGenMode::FileInput {
@@ -181,17 +195,26 @@ impl CCodeGen {
                  self.emit("return 1;");
                  self.dedent();
                  self.emit("}");
-                 self.emit(&format!("size_t read = fread({}.data, sizeof(float), {}.size, input_file);", input_clean, input_clean));
+                self.emit(&format!(
+                    "size_t read = fread({}.data, sizeof(float), {}.size, input_file);",
+                    input_clean, input_clean
+                ));
                  self.emit(&format!("if (read != {}.size) {{", input_clean));
                  self.indent();
-                 self.emit(&format!("fprintf(stderr, \"Error: expected %d floats, read %zu\\n\", {}.size, read);", input_clean));
+                self.emit(&format!(
+                    "fprintf(stderr, \"Error: expected %d floats, read %zu\\n\", {}.size, read);",
+                    input_clean
+                ));
                  self.emit("fclose(input_file);");
                  self.emit("return 1;");
                  self.dedent();
                  self.emit("}");
                  self.emit("fclose(input_file);");
              } else {
-                 self.emit(&format!("for(int i=0; i<{}.size; i++) {} .data[i] = 0.5f;", input_clean, input_clean));
+                self.emit(&format!(
+                    "for(int i=0; i<{}.size; i++) {} .data[i] = 0.5f;",
+                    input_clean, input_clean
+                ));
              }
              self.emit("");
         }
@@ -227,18 +250,35 @@ impl CCodeGen {
                     weights.push(clean.clone());
                     
                     // Init code
-                    let shape_vals: Vec<i32> = tensor.shape.dims.iter().map(|d| d.unwrap_or(1) as i32).collect();
-                    let shape_str = shape_vals.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(", ");
+                    let shape_vals: Vec<i32> = tensor
+                        .shape
+                        .dims
+                        .iter()
+                        .map(|d| d.unwrap_or(1) as i32)
+                        .collect();
+                    let shape_str = shape_vals
+                        .iter()
+                        .map(|v| v.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ");
                  
                     self.emit(&format!("int {}_shape[] = {{{}}};", clean, shape_str));
                     self.emit(&format!("Tensor {};", clean));
-                    self.emit(&format!("init_tensor(&{}, {}, {}_shape);", clean, shape_vals.len(), clean));
+                    self.emit(&format!(
+                        "init_tensor(&{}, {}, {}_shape);",
+                        clean,
+                        shape_vals.len(),
+                        clean
+                    ));
                  
                     if self.weights_mode == WeightsMode::External {
                         // Read from weights file
                         if let Some(raw_data) = &tensor.data {
                             let num_floats = raw_data.len() / 4;
-                            self.emit(&format!("if (fread({}.data, sizeof(float), {}, weights_file) != {}) {{", clean, num_floats, num_floats));
+                            self.emit(&format!(
+                                "if (fread({}.data, sizeof(float), {}, weights_file) != {}) {{",
+                                clean, num_floats, num_floats
+                            ));
                             self.indent();
                             self.emit("fprintf(stderr, \"Error reading weights from file\\n\");");
                             self.emit("fclose(weights_file);");
@@ -257,9 +297,19 @@ impl CCodeGen {
                                 })
                                 .collect();
                             
-                            let float_strs: Vec<String> = floats.iter().map(|f| format!("{:?}f", f)).collect();
-                            self.emit(&format!("float {}_data[] = {{{}}};", clean, float_strs.join(", ")));
-                            self.emit(&format!("memcpy({}.data, {}_data, {} * sizeof(float));", clean, clean, floats.len()));
+                            let float_strs: Vec<String> =
+                                floats.iter().map(|f| format!("{:?}f", f)).collect();
+                            self.emit(&format!(
+                                "float {}_data[] = {{{}}};",
+                                clean,
+                                float_strs.join(", ")
+                            ));
+                            self.emit(&format!(
+                                "memcpy({}.data, {}_data, {} * sizeof(float));",
+                                clean,
+                                clean,
+                                floats.len()
+                            ));
                         }
                     }
                     self.emit("");
@@ -274,9 +324,15 @@ impl CCodeGen {
 
         // 4. Call Inference
         let mut args = Vec::new();
-        for input in &inputs { args.push(format!("&{}", input)); }
-        for output in &outputs { args.push(format!("&{}", output)); }
-        for weight in &weights { args.push(format!("&{}", weight)); }
+        for input in &inputs {
+            args.push(format!("&{}", input));
+        }
+        for output in &outputs {
+            args.push(format!("&{}", output));
+        }
+        for weight in &weights {
+            args.push(format!("&{}", weight));
+        }
         
         self.emit(&format!("inference({});", args.join(", ")));
         self.emit("");
@@ -292,9 +348,15 @@ impl CCodeGen {
                 self.emit("return 1;");
                 self.dedent();
                 self.emit("}");
-                self.emit(&format!("fwrite({}.data, sizeof(float), {}.size, output_file);", outputs[0], outputs[0]));
+                self.emit(&format!(
+                    "fwrite({}.data, sizeof(float), {}.size, output_file);",
+                    outputs[0], outputs[0]
+                ));
                 self.emit("fclose(output_file);");
-                self.emit(&format!("printf(\"Wrote %d floats to output file\\n\", {}.size);", outputs[0]));
+                self.emit(&format!(
+                    "printf(\"Wrote %d floats to output file\\n\", {}.size);",
+                    outputs[0]
+                ));
             } else {
                 self.emit("// Print first output value for verification");
                 self.emit(&format!("if ({}.data != NULL) printf(\"Output 0: %f\\n\", {}.data[0]);", outputs[0], outputs[0]));
@@ -302,9 +364,15 @@ impl CCodeGen {
         }
         
         // 5. Cleanup
-        for input in &inputs { self.emit(&format!("free_tensor(&{});", input)); }
-        for output in &outputs { self.emit(&format!("free_tensor(&{});", output)); }
-        for weight in &weights { self.emit(&format!("free_tensor(&{});", weight)); }
+        for input in &inputs {
+            self.emit(&format!("free_tensor(&{});", input));
+        }
+        for output in &outputs {
+            self.emit(&format!("free_tensor(&{});", output));
+        }
+        for weight in &weights {
+            self.emit(&format!("free_tensor(&{});", weight));
+        }
 
         self.emit("return 0;");
         self.dedent();
@@ -359,7 +427,8 @@ impl CCodeGen {
                 if !input_set.contains(&clean) 
                    && !output_set.contains(&clean) 
                    && !weights.contains(&clean) 
-                   && !intermediates.contains(&clean) {
+                    && !intermediates.contains(&clean)
+                {
                     intermediates.insert(clean);
                 }
             }
@@ -391,13 +460,16 @@ impl CCodeGen {
 
         // Execute graph nodes
         for node in &graph.nodes {
-            let func_name = Self::clean_name(&node.id);
+            let func_name = Self::clean_name_num(&node.id);
             let mut call_args = Vec::new();
 
             // Inputs
             for input in &node.inputs {
                 let clean = Self::clean_name(input);
-                if input_set.contains(&clean) || output_set.contains(&clean) || weights.contains(&clean) {
+                if input_set.contains(&clean)
+                    || output_set.contains(&clean)
+                    || weights.contains(&clean)
+                {
                     call_args.push(clean);
                 } else {
                     call_args.push(format!("&{}", clean));
@@ -407,7 +479,10 @@ impl CCodeGen {
             // Outputs
             for output in &node.outputs {
                 let clean = Self::clean_name(output);
-                if output_set.contains(&clean) || input_set.contains(&clean) || weights.contains(&clean) {
+                if output_set.contains(&clean)
+                    || input_set.contains(&clean)
+                    || weights.contains(&clean)
+                {
                     call_args.push(clean);
                 } else {
                     call_args.push(format!("&{}", clean));
@@ -423,7 +498,8 @@ impl CCodeGen {
 
     fn helper_init_tensor() -> String {
         let mut code = String::new();
-        code.push_str(r###"
+        code.push_str(
+            r###"
 void init_tensor(Tensor* tensor, int ndim, const int* shape_values) {
 	tensor->ndim = ndim;
 	tensor->shape = (int*)malloc(ndim * sizeof(int));
@@ -444,13 +520,15 @@ void init_tensor(Tensor* tensor, int ndim, const int* shape_values) {
 			free(tensor->shape);
 			exit(EXIT_FAILURE);
 	}
-}"###);
+}"###,
+        );
         code
     }
 
     fn helper_free_tensor() -> String {
         let mut code = String::new();
-        code.push_str(r###"
+        code.push_str(
+            r###"
 void free_tensor(Tensor* tensor) {
 	if (tensor->data != NULL) {
 			free(tensor->data);
@@ -460,7 +538,8 @@ void free_tensor(Tensor* tensor) {
 			free(tensor->shape);
 			tensor->shape = NULL;
 	}
-}"###);
+}"###,
+        );
 
         code
     }
@@ -493,7 +572,10 @@ void free_tensor(Tensor* tensor) {
         self.emit(&format!("int size = {}->size;", input));
         
         // Output same shape as input
-        self.emit(&format!("reshape_tensor({}, {}->ndim, {}->shape);", output, input, input));
+        self.emit(&format!(
+            "reshape_tensor({}, {}->ndim, {}->shape);",
+            output, input, input
+        ));
 
         // For numerical stability, find max first
         self.emit(&format!("float max_val = {}->data[0];", input));
@@ -571,7 +653,10 @@ void free_tensor(Tensor* tensor) {
         
         // Output Shape: [M, N]
         self.emit("int output_shape[] = {M, N};");
-        self.emit(&format!("reshape_tensor({}, 2, output_shape);", output_name));
+        self.emit(&format!(
+            "reshape_tensor({}, 2, output_shape);",
+            output_name
+        ));
 
         self.emit("for (int i = 0; i < M; i++) {");
         self.indent();
@@ -822,7 +907,10 @@ void free_tensor(Tensor* tensor) {
         self.indent();
 
         self.emit(&format!("int size = {}->size;", input));
-        self.emit(&format!("reshape_tensor({}, {}->ndim, {}->shape);", output, input, input));
+        self.emit(&format!(
+            "reshape_tensor({}, {}->ndim, {}->shape);",
+            output, input, input
+        ));
 
         self.emit("for (int i = 0; i < size; i++) {");
         self.indent();
@@ -853,11 +941,17 @@ void free_tensor(Tensor* tensor) {
         self.indent();
 
         self.emit(&format!("int size = {}->size;", input1));
-        self.emit(&format!("reshape_tensor({}, {}->ndim, {}->shape);", output, input1, input1));
+        self.emit(&format!(
+            "reshape_tensor({}, {}->ndim, {}->shape);",
+            output, input1, input1
+        ));
 
         self.emit("for (int i = 0; i < size; i++) {");
         self.indent();
-        self.emit(&format!("{}->data[i] = {}->data[i] + {}->data[i];", output, input1, input2));
+        self.emit(&format!(
+            "{}->data[i] = {}->data[i] + {}->data[i];",
+            output, input1, input2
+        ));
         self.dedent();
         self.emit("}");
         self.dedent();
@@ -895,7 +989,10 @@ void free_tensor(Tensor* tensor) {
         self.emit("float sum = 0.0f;");
         self.emit("for (int k = 0; k < K; k++) {");
         self.indent();
-        self.emit(&format!("sum += {}->data[i * K + k] * {}->data[k * N + j];", input1, input2));
+        self.emit(&format!(
+            "sum += {}->data[i * K + k] * {}->data[k * N + j];",
+            input1, input2
+        ));
         self.dedent();
         self.emit("}");
         self.emit(&format!("{}->data[i * N + j] = sum;", output));
@@ -914,7 +1011,8 @@ void free_tensor(Tensor* tensor) {
 
     fn helper_reshape_tensor() -> String {
         let mut code = String::new();
-        code.push_str(r###"
+        code.push_str(
+            r###"
 void reshape_tensor(Tensor* tensor, int ndim, const int* shape_values) {
     int size = 1;
     for (int i = 0; i < ndim; i++) {
@@ -948,7 +1046,8 @@ void reshape_tensor(Tensor* tensor, int ndim, const int* shape_values) {
     tensor->size = size;
     tensor->data = (float*)malloc(size * sizeof(float));
     if (tensor->data == NULL) { free(tensor->shape); exit(EXIT_FAILURE); }
-}"###);
+}"###,
+        );
         code
     }
 
@@ -996,7 +1095,26 @@ void reshape_tensor(Tensor* tensor, int ndim, const int* shape_values) {
         // Replace '.' -> '_'
         let parts: Vec<&str> = name.split('/').collect();
         let last_part = parts.last().map(|s| *s).unwrap_or(name);
-        last_part.replace('.', "_")
+        last_part.replace('.', "_").replace("onnx::", "")
+    }
+
+    fn clean_name_num(name: &str) -> String {
+        // Split '/' and take the last string,
+        // Replace '.' -> '_'
+        let parts: Vec<&str> = name.split('/').collect();
+        let last_part = parts.last().map(|s| *s).unwrap_or(name);
+        let _n = last_part.replace('.', "_").replace("onnx::", "");
+
+        let mut cleaned_name = String::new();
+        for c in _n.chars() {
+            if !c.is_ascii_digit() {
+                cleaned_name.push(c);
+            }
+        }
+        cleaned_name
+            .trim_end_matches('_')
+            .to_string()
+            .replace("onnx::", "")
     }
 
     fn emit(&mut self, line: &str) {
