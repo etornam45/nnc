@@ -1,4 +1,7 @@
-use crate::{codegen::ops::OpGen, ir::{Attribute, Graph, Node, Op, Shape, Tensor}};
+use crate::{
+    codegen::ops::OpGen,
+    ir::{Attribute, Graph, Node, Op, Shape, Tensor},
+};
 use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -19,6 +22,7 @@ pub struct CCodeGen {
     code: String,
     mode: CodeGenMode,
     weights_mode: WeightsMode,
+    op_set: HashMap<Op, Node>,
 }
 
 impl CCodeGen {
@@ -28,10 +32,18 @@ impl CCodeGen {
             code: String::new(),
             mode,
             weights_mode,
+            op_set: HashMap::new(),
         };
     }
 
     pub fn generate(&mut self, graph: Graph) -> String {
+        //TODO: Build Hash set of all operators and then I generate the code for it
+        for node in &graph.nodes {
+            self.op_set.insert(node.op.clone(), node.clone());
+        }
+
+        println!("{:?}", self.op_set.keys());
+
         self.code.clear();
         // return self.code;
 
@@ -57,8 +69,10 @@ impl CCodeGen {
         self.gen_helpers();
 
         // NODES
-        for node in &graph.nodes {
-            self.gen_node(node.clone(), graph.clone());
+        let ops_to_process: Vec<_> = self.op_set.values().cloned().collect();
+        for op_node in ops_to_process {
+            let mut n = op_node.clone();
+            self.gen_node(n, graph.clone());
         }
 
         // Inference
