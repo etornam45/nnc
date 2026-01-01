@@ -36,7 +36,7 @@ impl OpGen {
         Self::emit(
             &mut code,
             &format!(
-                "{}->data[i] = {}->data[i] + {}->data[i]; }}",
+                "{}->data[i] = {}->data[i] + {}->data[i]; }} \n}}",
                 output, input1, input2
             ),
         );
