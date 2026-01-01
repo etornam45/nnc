@@ -48,7 +48,8 @@ fn main() {
     }
 
     let loader = OnnxLoader::new();
-    let _ir = OnnxLoader::load(&loader, "out/tinynet.onnx").map_err(|e| e.to_string());
+    let _ir = OnnxLoader::load(&loader, "out/resnet_model.onnx").map_err(|e| e.to_string());
+    // print!("IR {:?}", _ir);
     let graph = _ir.expect("Graph is expected");
 
     let mut cg = CCodeGen::new(mode, weights_mode);
