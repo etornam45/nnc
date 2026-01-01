@@ -359,7 +359,17 @@ impl CCodeGen {
                 ));
             } else {
                 self.emit("// Print first output value for verification");
-                self.emit(&format!("if ({}.data != NULL) printf(\"Output 0: %f\\n\", {}.data[0]);", outputs[0], outputs[0]));
+                self.emit(&format!("if ({}.data != NULL) {{", outputs[0]));
+                self.indent();
+                self.emit(&format!("printf(\"Output: [\");"));
+                self.emit(&format!("for (int i = 0; i < {}.size; i++) {{", outputs[0]));
+                self.indent();
+                self.emit(&format!("printf(\"%f%s\", {}.data[i], (i == {}.size - 1 ? \"\" : \", \"));", outputs[0], outputs[0]));
+                self.dedent();
+                self.emit("}");
+                self.emit(&format!("printf(\"]\"); \n"));
+                self.dedent();
+                self.emit("}");
             }
         }
         
