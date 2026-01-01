@@ -21,7 +21,7 @@ pub struct Tensor {
     pub data: Option<Vec<u8>>
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, Hash, PartialEq)]
 pub enum Op {
     Add,
     MatMul,
@@ -30,6 +30,9 @@ pub enum Op {
     Softmax,
     Flatten,
     Gemm,
+    Identity,
+    MaxPool,
+    GlobalAveragePool,
     // TODO: More here 
 }
 

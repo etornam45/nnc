@@ -118,7 +118,10 @@ impl OnnxLoader {
             "Softmax" => Op::Softmax,
             "Flatten" => Op::Flatten,
             "Gemm" => Op::Gemm,
-            _ => return Err(format!("Unsupported Op: {}", node.op_type)),
+            "Identity" => Op::Identity,
+            "MaxPool" => Op::MaxPool,
+            "GlobalAveragePool" => Op::GlobalAveragePool,
+            _ => panic!("{}",format!("Unsupported Op::{}", node.op_type)),
         };
 
         // Attribute parsing
