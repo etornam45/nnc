@@ -3,3 +3,6 @@ out/
 .vscode/
 tiny
 __pycache__/onnx.cpython-312.pyc
+.cursor/
+DS_Store
+node_modules/
