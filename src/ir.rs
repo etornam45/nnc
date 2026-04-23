@@ -24,11 +24,17 @@ pub struct Tensor {
 #[derive(Debug, Clone, Eq, Hash, PartialEq)]
 pub enum Op {
     Add,
+    Mul,
+    Sub,
     MatMul,
     Conv2d,
     Relu,
     Softmax,
     Flatten,
+    Reshape,
+    Transpose,
+    Concat,
+    BatchNormalization,
     Gemm,
     Identity,
     MaxPool,
