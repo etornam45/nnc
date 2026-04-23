@@ -550,6 +550,156 @@ impl OpGen {
         code
     }
 
+    pub fn gen_div(node: &Node) -> String {
+        Self::gen_binary_op(node, "/")
+    }
+
+    pub fn gen_pow(node: &Node) -> String {
+        let input1 = Self::clean_name(&node.inputs[0]);
+        let input2 = Self::clean_name(&node.inputs[1]);
+        let output = Self::clean_name(&node.outputs[0]);
+        let mut code = String::new();
+
+        Self::emit(&mut code, &format!("void {}(Tensor* {}, Tensor* {}, Tensor* {}) {{", Self::clean_name_num(&node.id), input1, input2, output));
+        Self::emit(&mut code, &format!("\tint size = {}->size;", input1));
+        Self::emit(&mut code, &format!("\treshape_tensor({}, {}->ndim, {}->shape);", output, input1, input1));
+        Self::emit(&mut code, "\tfor (int i = 0; i < size; i++) {");
+        Self::emit(&mut code, &format!("\t\t{}->data[i] = powf({}->data[i], {}->data[i]);", output, input1, input2));
+        Self::emit(&mut code, "\t}");
+        Self::emit(&mut code, "}");
+        code
+    }
+
+    pub fn gen_layer_norm(node: &Node) -> String {
+        let x = Self::clean_name(&node.inputs[0]);
+        let scale = Self::clean_name(&node.inputs[1]);
+        let bias = if node.inputs.len() > 2 { Some(Self::clean_name(&node.inputs[2])) } else { None };
+        let output = Self::clean_name(&node.outputs[0]);
+        let axis = Self::get_int_attr(node, "axis").unwrap_or(-1);
+        let epsilon = Self::get_float_attr(node, "epsilon").unwrap_or(1e-5);
+        let mut code = String::new();
+
+        let sig = if let Some(ref b) = bias {
+            format!("void {}(Tensor* {}, Tensor* {}, Tensor* {}, Tensor* {}) {{", Self::clean_name_num(&node.id), x, scale, b, output)
+        } else {
+            format!("void {}(Tensor* {}, Tensor* {}, Tensor* {}) {{", Self::clean_name_num(&node.id), x, scale, output)
+        };
+        Self::emit(&mut code, &sig);
+
+        Self::emit(&mut code, &format!("\treshape_tensor({}, {}->ndim, {}->shape);", output, x, x));
+        Self::emit(&mut code, &format!("\tint axis = {};", axis));
+        Self::emit(&mut code, &format!("\tif (axis < 0) axis += {}->ndim;", x));
+        
+        Self::emit(&mut code, "\tint outer_size = 1;");
+        Self::emit(&mut code, "\tfor (int i = 0; i < axis; i++) outer_size *= x->shape[i];");
+        Self::emit(&mut code, "\tint inner_size = 1;");
+        Self::emit(&mut code, "\tfor (int i = axis; i < x->ndim; i++) inner_size *= x->shape[i];");
+
+        Self::emit(&mut code, "\tfor (int i = 0; i < outer_size; i++) {");
+        Self::emit(&mut code, "\t\tfloat sum = 0.0f;");
+        Self::emit(&mut code, "\t\tfor (int j = 0; j < inner_size; j++) sum += x->data[i * inner_size + j];");
+        Self::emit(&mut code, "\t\tfloat mean = sum / inner_size;");
+        Self::emit(&mut code, "\t\tfloat var = 0.0f;");
+        Self::emit(&mut code, "\t\tfor (int j = 0; j < inner_size; j++) {");
+        Self::emit(&mut code, "\t\t\tfloat diff = x->data[i * inner_size + j] - mean;");
+        Self::emit(&mut code, "\t\t\tvar += diff * diff;");
+        Self::emit(&mut code, "\t\t}");
+        Self::emit(&mut code, &format!("\t\tfloat std = sqrtf(var / inner_size + {}f);", epsilon));
+        Self::emit(&mut code, "\t\tfor (int j = 0; j < inner_size; j++) {");
+        let bias_add = if let Some(ref b) = bias { format!(" + {}->data[j]", b) } else { "".to_string() };
+        Self::emit(&mut code, &format!("\t\t\t{}->data[i * inner_size + j] = ((x->data[i * inner_size + j] - mean) / std) * {}->data[j]{};", output, scale, bias_add));
+        Self::emit(&mut code, "\t\t}");
+        Self::emit(&mut code, "\t}");
+        Self::emit(&mut code, "}");
+        code
+    }
+
+    pub fn gen_gelu(node: &Node) -> String {
+        // Fast GELU approximation: 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
+        Self::gen_unary_math_op(node, "0.5f * x * (1.0f + tanhf(0.79788456f * (x + 0.044715f * x * x * x)))")
+    }
+
+    pub fn gen_gather(node: &Node) -> String {
+        let data = Self::clean_name(&node.inputs[0]);
+        let indices = Self::clean_name(&node.inputs[1]);
+        let output = Self::clean_name(&node.outputs[0]);
+        let axis = Self::get_int_attr(node, "axis").unwrap_or(0);
+        let mut code = String::new();
+
+        Self::emit(&mut code, &format!("void {}(Tensor* {}, Tensor* {}, Tensor* {}) {{", Self::clean_name_num(&node.id), data, indices, output));
+        Self::emit(&mut code, &format!("\tint axis = {};", axis));
+        Self::emit(&mut code, &format!("\tif (axis < 0) axis += {}->ndim;", data));
+        
+        // Calculate output shape
+        Self::emit(&mut code, &format!("\tint out_ndim = {}->ndim + {}->ndim - 1;", data, indices));
+        Self::emit(&mut code, "\tint* out_shape = (int*)malloc(out_ndim * sizeof(int));");
+        Self::emit(&mut code, "\tint k = 0;");
+        Self::emit(&mut code, &format!("\tfor (int i = 0; i < axis; i++) out_shape[k++] = {}->shape[i];", data));
+        Self::emit(&mut code, &format!("\tfor (int i = 0; i < {}->ndim; i++) out_shape[k++] = {}->shape[i];", indices, indices));
+        Self::emit(&mut code, &format!("\tfor (int i = axis + 1; i < {}->ndim; i++) out_shape[k++] = {}->shape[i];", data, data));
+        Self::emit(&mut code, &format!("\treshape_tensor({}, out_ndim, out_shape);", output));
+        Self::emit(&mut code, "\tfree(out_shape);");
+
+        Self::emit(&mut code, "\tint outer_size = 1;");
+        Self::emit(&mut code, &format!("\tfor (int i = 0; i < axis; i++) outer_size *= {}->shape[i];", data));
+        Self::emit(&mut code, &format!("\tint inner_size = 1;"));
+        Self::emit(&mut code, &format!("\tfor (int i = axis + 1; i < {}->ndim; i++) inner_size *= {}->shape[i];", data, data));
+        Self::emit(&mut code, &format!("\tint axis_size = {}->shape[axis];", data));
+
+        Self::emit(&mut code, "\tfor (int i = 0; i < outer_size; i++) {");
+        Self::emit(&mut code, &format!("\t\tfor (int j = 0; j < {}->size; j++) {{", indices));
+        Self::emit(&mut code, &format!("\t\t\tint idx = (int){}->data[j];", indices));
+        Self::emit(&mut code, "\t\t\tif (idx < 0) idx += axis_size;");
+        Self::emit(&mut code, "\t\t\tfor (int l = 0; l < inner_size; l++) {");
+        Self::emit(&mut code, &format!("\t\t\t\t{}->data[(i * {}->size + j) * inner_size + l] = {}->data[(i * axis_size + idx) * inner_size + l];", output, indices, data));
+        Self::emit(&mut code, "\t\t\t}");
+        Self::emit(&mut code, "\t\t}");
+        Self::emit(&mut code, "\t}");
+        Self::emit(&mut code, "}");
+        code
+    }
+
+    pub fn gen_slice(node: &Node) -> String {
+        //FIXME: Simplified Slice: assuming static attributes for now or inputs for v10+
+        // This is a complex op to generalize in a simple C snippet without more IR info.
+        // For now, let's implement a placeholder that handles the most common case (slicing sequence length).
+        let input = Self::clean_name(&node.inputs[0]);
+        let output = Self::clean_name(&node.outputs[0]);
+        let mut code = String::new();
+
+        Self::emit(&mut code, &format!("void {}(Tensor* {}, Tensor* {}) {{", Self::clean_name_num(&node.id), input, output));
+        Self::emit(&mut code, "// Simplified slice: copies input to output (no-op for shape)");
+        Self::emit(&mut code, &format!("\treshape_tensor({}, {}->ndim, {}->shape);", output, input, input));
+        Self::emit(&mut code, &format!("\tfor (int i = 0; i < {}->size; i++) {}->data[i] = {}->data[i];", input, output, input));
+        Self::emit(&mut code, "}");
+        code
+    }
+
+    pub fn gen_reduce_mean(node: &Node) -> String {
+        let input = Self::clean_name(&node.inputs[0]);
+        let output = Self::clean_name(&node.outputs[0]);
+        let _axes = Self::get_ints_attr(node, "axes").unwrap_or_else(|| vec![0]);
+        let keepdims = Self::get_int_attr(node, "keepdims").unwrap_or(1) == 1;
+        let mut code = String::new();
+
+        Self::emit(&mut code, &format!("void {}(Tensor* {}, Tensor* {}) {{", Self::clean_name_num(&node.id), input, output));
+        Self::emit(&mut code, "// Simplified ReduceMean: reducing over specified axes");
+        //FIXME: This requires complex loop generation based on axes. 
+        // For now, let's implement a very simple version that reduces everything if no axes, or just the first axis.
+        Self::emit(&mut code, "\tfloat sum = 0.0f;");
+        Self::emit(&mut code, &format!("\tfor (int i = 0; i < {}->size; i++) sum += {}->data[i];", input, input));
+        if keepdims {
+             Self::emit(&mut code, "\tint out_shape[] = {1}; // Placeholder shape");
+             Self::emit(&mut code, &format!("\treshape_tensor({}, 1, out_shape);", output));
+        } else {
+             Self::emit(&mut code, "\tint out_shape[] = {1};");
+             Self::emit(&mut code, &format!("\treshape_tensor({}, 1, out_shape);", output));
+        }
+        Self::emit(&mut code, &format!("\t{}->data[0] = sum / {}->size;", output, input));
+        Self::emit(&mut code, "}");
+        code
+    }
+
     fn get_int_attr(node: &Node, attr_name: &str) -> Option<i64> {
         node.attr
             .get(attr_name)

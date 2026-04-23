@@ -85,11 +85,11 @@ fn ensure_out_dir(path: &Path) -> CompileResult<()> {
 fn validate_graph(graph: &ir::Graph) -> CompileResult<()> {
     for node in &graph.nodes {
         let min_inputs = match node.op {
-            ir::Op::Add | ir::Op::Sub | ir::Op::Mul | ir::Op::MatMul => 2,
+            ir::Op::Add | ir::Op::Sub | ir::Op::Mul | ir::Op::MatMul | ir::Op::Div | ir::Op::Pow => 2,
             ir::Op::Conv2d => 2,
             ir::Op::Reshape => 2,
-            ir::Op::Concat => 2,
-            ir::Op::BatchNormalization => 5,
+            ir::Op::Concat | ir::Op::Gather => 2,
+            ir::Op::BatchNormalization | ir::Op::LayerNormalization => 3, // X, scale, B (some models use 3, some 2 if bias omitted)
             ir::Op::Relu
             | ir::Op::Softmax
             | ir::Op::Flatten
@@ -101,6 +101,9 @@ fn validate_graph(graph: &ir::Graph) -> CompileResult<()> {
             | ir::Op::Sqrt
             | ir::Op::Exp
             | ir::Op::Log
+            | ir::Op::Gelu
+            | ir::Op::ReduceMean
+            | ir::Op::Slice
             | ir::Op::Transpose => 1,
             ir::Op::Gemm => 3,
         };

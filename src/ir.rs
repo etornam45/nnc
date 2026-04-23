@@ -44,6 +44,13 @@ pub enum Op {
     Sqrt,
     Exp,
     Log,
+    LayerNormalization,
+    Gelu,
+    Gather,
+    Slice,
+    ReduceMean,
+    Div,
+    Pow,
 }
 
 

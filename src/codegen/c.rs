@@ -537,6 +537,13 @@ void free_tensor(Tensor* tensor) {
             Op::Sqrt => self.emit(OpGen::gen_sqrt(&node).as_str()),
             Op::Exp => self.emit(OpGen::gen_exp(&node).as_str()),
             Op::Log => self.emit(OpGen::gen_log(&node).as_str()),
+            Op::LayerNormalization => self.emit(OpGen::gen_layer_norm(&node).as_str()),
+            Op::Gelu => self.emit(OpGen::gen_gelu(&node).as_str()),
+            Op::Gather => self.emit(OpGen::gen_gather(&node).as_str()),
+            Op::Slice => self.emit(OpGen::gen_slice(&node).as_str()),
+            Op::ReduceMean => self.emit(OpGen::gen_reduce_mean(&node).as_str()),
+            Op::Div => self.emit(OpGen::gen_div(&node).as_str()),
+            Op::Pow => self.emit(OpGen::gen_pow(&node).as_str()),
         }
         Ok(())
     }
