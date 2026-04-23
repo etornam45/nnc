@@ -1,7 +1,9 @@
-use crate::ir::{Attribute, Graph, Node, Op, Shape, Tensor};
+use crate::{
+    error::{CapabilityReport, CompileError, CompileResult},
+    ir::{Attribute, Graph, Node, Op, Shape, Tensor},
+};
 use candle_onnx::onnx::{
-    tensor_shape_proto::{dimension, Dimension},
-    type_proto, ModelProto, NodeProto, TensorProto, TypeProto, ValueInfoProto,
+    tensor_shape_proto::dimension, type_proto, ModelProto, NodeProto, TensorProto, ValueInfoProto,
 };
 use prost::Message;
 use std::{collections::HashMap, fs::File, io::Read};
@@ -13,19 +15,54 @@ impl OnnxLoader {
         return OnnxLoader;
     }
 
-    pub fn load(&self, path: &str) -> Result<Graph, String> {
-        let mut file = File::open(path).map_err(|e| e.to_string())?;
+    pub fn load(&self, path: &str) -> CompileResult<Graph> {
+        let mut file = File::open(path)?;
         let mut buffer = Vec::new();
 
-        file.read_to_end(&mut buffer).map_err(|e| e.to_string())?;
+        file.read_to_end(&mut buffer)?;
 
-        let model = ModelProto::decode(prost::bytes::Bytes::from(buffer)).map_err(|e| e.to_string())?;
+        let model = ModelProto::decode(prost::bytes::Bytes::from(buffer))
+            .map_err(|e| CompileError::Decode(e.to_string()))?;
 
         self.convert_model(model)
     }
 
-    fn convert_model(&self, model: ModelProto) -> Result<Graph, String> {
-        let graph_proto = model.graph.ok_or("No graph in model")?;
+    pub fn capability_report(&self, path: &str) -> CompileResult<CapabilityReport> {
+        let mut file = File::open(path)?;
+        let mut buffer = Vec::new();
+        file.read_to_end(&mut buffer)?;
+        let model = ModelProto::decode(prost::bytes::Bytes::from(buffer))
+            .map_err(|e| CompileError::Decode(e.to_string()))?;
+
+        let graph_proto = model
+            .graph
+            .ok_or_else(|| CompileError::InvalidModel("No graph in model".to_string()))?;
+
+        let mut supported = Vec::new();
+        let mut unsupported = Vec::new();
+        for node in &graph_proto.node {
+            if Self::map_op(node.op_type.as_str()).is_some() {
+                supported.push(node.op_type.clone());
+            } else {
+                unsupported.push(node.op_type.clone());
+            }
+        }
+        supported.sort();
+        supported.dedup();
+        unsupported.sort();
+        unsupported.dedup();
+
+        Ok(CapabilityReport {
+            model_path: path.into(),
+            supported_ops: supported,
+            unsupported_ops: unsupported,
+        })
+    }
+
+    fn convert_model(&self, model: ModelProto) -> CompileResult<Graph> {
+        let graph_proto = model
+            .graph
+            .ok_or_else(|| CompileError::InvalidModel("No graph in model".to_string()))?;
 
         let mut graph = Graph {
             name: graph_proto.name.clone(),
@@ -82,7 +119,11 @@ impl OnnxLoader {
         };
     }
 
+    /*
+    ValueInfoProto is the shape of the tensor
+    */
     fn convert_value_info(&self, value_info: &ValueInfoProto) -> Option<Tensor> {
+        // ValueInfoProto is the shape of the tensor
         let type_proto = value_info.r#type.as_ref()?;
         let value = type_proto.value.as_ref()?;
 
@@ -109,20 +150,9 @@ impl OnnxLoader {
         }
     }
 
-    fn convert_node(&self, node: &NodeProto) -> Result<Node, String> {
-        let op = match node.op_type.as_str() {
-            "MatMul" => Op::MatMul,
-            "Add" => Op::Add,
-            "Conv" => Op::Conv2d,
-            "Relu" => Op::Relu,
-            "Softmax" => Op::Softmax,
-            "Flatten" => Op::Flatten,
-            "Gemm" => Op::Gemm,
-            "Identity" => Op::Identity,
-            "MaxPool" => Op::MaxPool,
-            "GlobalAveragePool" => Op::GlobalAveragePool,
-            _ => panic!("{}",format!("Unsupported Op::{}", node.op_type)),
-        };
+    fn convert_node(&self, node: &NodeProto) -> CompileResult<Node> {
+        let op = Self::map_op(node.op_type.as_str())
+            .ok_or_else(|| CompileError::UnsupportedOp(node.op_type.clone()))?;
 
         // Attribute parsing
         let mut attr = HashMap::new();
@@ -149,5 +179,27 @@ impl OnnxLoader {
             outputs: node.output.clone(),
             attr,
         })
+    }
+
+    fn map_op(op_type: &str) -> Option<Op> {
+        match op_type {
+            "MatMul" => Some(Op::MatMul),
+            "Add" => Some(Op::Add),
+            "Mul" => Some(Op::Mul),
+            "Sub" => Some(Op::Sub),
+            "Conv" => Some(Op::Conv2d),
+            "Relu" => Some(Op::Relu),
+            "Softmax" => Some(Op::Softmax),
+            "Flatten" => Some(Op::Flatten),
+            "Reshape" => Some(Op::Reshape),
+            "Transpose" => Some(Op::Transpose),
+            "Concat" => Some(Op::Concat),
+            "BatchNormalization" => Some(Op::BatchNormalization),
+            "Gemm" => Some(Op::Gemm),
+            "Identity" => Some(Op::Identity),
+            "MaxPool" => Some(Op::MaxPool),
+            "GlobalAveragePool" => Some(Op::GlobalAveragePool),
+            _ => None,
+        }
     }
 }
