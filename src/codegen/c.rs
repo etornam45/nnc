@@ -1,8 +1,11 @@
 use crate::{
     codegen::ops::OpGen,
-    ir::{Attribute, Graph, Node, Op, Shape, Tensor},
+    error::CompileResult,
+    ir::{Attribute, Graph, Node, Op},
 };
 use std::collections::{HashMap, HashSet};
+
+use super::{planner::InferencePlan, runtime};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum CodeGenMode {
@@ -36,7 +39,7 @@ impl CCodeGen {
         };
     }
 
-    pub fn generate(&mut self, graph: Graph) -> String {
+    pub fn generate(&mut self, graph: Graph) -> CompileResult<String> {
         //TODO: Build Hash set of all operators and then I generate the code for it
         for node in &graph.nodes {
             self.op_set.insert(node.op.clone(), node.clone());
@@ -72,8 +75,7 @@ impl CCodeGen {
         // NODES
         let ops_to_process: Vec<_> = self.op_set.values().cloned().collect();
         for op_node in ops_to_process {
-            let mut n = op_node.clone();
-            self.gen_node(n, graph.clone());
+            self.gen_node(op_node.clone(), graph.clone())?;
         }
 
         // Inference
@@ -85,7 +87,7 @@ impl CCodeGen {
             self.gen_main_fn(graph);
         }
 
-        return self.code.clone();
+        Ok(self.code.clone())
     }
 
     pub fn generate_weights_file(&self, graph: &Graph) -> Vec<u8> {
@@ -391,59 +393,14 @@ impl CCodeGen {
     }
 
     fn gen_inference(&mut self, graph: Graph) {
-        let inputs: Vec<String> = graph
-            .input_names
-            .iter()
-            .map(|n| Self::clean_name(n))
-            .collect();
-        let outputs: Vec<String> = graph
-            .output_names
-            .iter()
-            .map(|n| Self::clean_name(n))
-            .collect();
+        let plan = InferencePlan::from_graph(&graph);
+        let inputs = plan.inputs;
+        let outputs = plan.outputs;
+        let weights = plan.weights;
+        let intermediates: HashSet<String> = plan.intermediates.into_iter().collect();
 
-        // Identify weights and intermediates
-        let mut weights = Vec::new();
-        let mut intermediates = HashSet::new();
-
-        // Helper sets for lookups
         let input_set: HashSet<_> = inputs.iter().cloned().collect();
         let output_set: HashSet<_> = outputs.iter().cloned().collect();
-
-        // Iterate over tensors to classify
-        // Note: graph.tensors contains both Initializers (data=Some) and ValueInfo (data=None)
-        let mut sorted_tensor_names: Vec<_> = graph.tensors.keys().cloned().collect();
-        sorted_tensor_names.sort();
-
-        for name in &sorted_tensor_names {
-            let clean = Self::clean_name(name);
-            if input_set.contains(&clean) || output_set.contains(&clean) {
-                continue;
-            }
-
-            if let Some(tensor) = graph.tensors.get(name) {
-                if tensor.data.is_some() {
-                    weights.push(clean);
-                } else {
-                    intermediates.insert(clean);
-                }
-            }
-        }
-
-        // Also check if any node I/O is missing from graph.tensors (e.g. pure intermediates not in ValueInfo)
-        // This is important for implicit intermediates
-        for node in &graph.nodes {
-            for name in node.inputs.iter().chain(node.outputs.iter()) {
-                let clean = Self::clean_name(name);
-                if !input_set.contains(&clean)
-                    && !output_set.contains(&clean)
-                    && !weights.contains(&clean)
-                    && !intermediates.contains(&clean)
-                {
-                    intermediates.insert(clean);
-                }
-            }
-        }
 
         // Generate function signature
         let mut args = Vec::new();
@@ -507,6 +464,7 @@ impl CCodeGen {
         self.emit("}");
     }
 
+    #[allow(dead_code)]
     fn helper_init_tensor() -> String {
         let mut code = String::new();
         code.push_str(
@@ -536,6 +494,7 @@ void init_tensor(Tensor* tensor, int ndim, const int* shape_values) {
         code
     }
 
+    #[allow(dead_code)]
     fn helper_free_tensor() -> String {
         let mut code = String::new();
         code.push_str(
@@ -555,20 +514,26 @@ void free_tensor(Tensor* tensor) {
         code
     }
 
-    fn gen_node(&mut self, node: Node, graph: Graph) {
+    fn gen_node(&mut self, node: Node, graph: Graph) -> CompileResult<()> {
         match node.op {
-            Op::Add => self.emit(OpGen::gen_add(node).as_str()),
+            Op::Add => self.emit(OpGen::gen_add(&node).as_str()),
+            Op::Sub => self.emit(OpGen::gen_sub(&node).as_str()),
+            Op::Mul => self.emit(OpGen::gen_mul(&node).as_str()),
             Op::MatMul => self.gen_matmul(node, graph),
             Op::Conv2d => self.gen_conv_2d(node, graph),
             Op::Relu => self.gen_relu(node, graph),
             Op::Softmax => self.gen_softmax(node, graph),
             Op::Flatten => self.gen_flatten(node, graph),
+            Op::Reshape => self.emit(OpGen::gen_reshape(&node).as_str()),
+            Op::Transpose => self.emit(OpGen::gen_transpose(&node)?.as_str()),
+            Op::Concat => self.emit(OpGen::gen_concat(&node)?.as_str()),
+            Op::BatchNormalization => self.emit(OpGen::gen_batch_norm(&node)?.as_str()),
             Op::Gemm => self.gen_gemm(node, graph),
             Op::Identity => self.gen_identity(node),
             Op::MaxPool => self.gen_max_pool(node),
             Op::GlobalAveragePool => self.gen_global_average_pool(node),
-            _ => panic!("Op: {:?} not implemented", node.op),
         }
+        Ok(())
     }
 
     fn gen_global_average_pool(&mut self, node: Node) {
@@ -641,12 +606,7 @@ void free_tensor(Tensor* tensor) {
                 Attribute::Ints(v) => Some(v.clone()),
                 _ => None,
             })
-            .unwrap_or_else(|| {
-                panic!(
-                    "MaxPool: kernel_shape attribute not found for node {}",
-                    node.id
-                )
-            });
+            .unwrap_or_else(|| vec![1, 1]);
 
         let strides = node
             .attr
@@ -669,11 +629,11 @@ void free_tensor(Tensor* tensor) {
             .unwrap_or_else(|| vec![0, 0, 0, 0]); // Default padding of 0
 
         let k_h = kernel_shape[0];
-        let kW = kernel_shape[1];
-        let sH = strides[0];
-        let sW = strides[1];
-        let pH_start = pads[0];
-        let pW_start = pads[1];
+        let k_w = kernel_shape[1];
+        let s_h = strides[0];
+        let s_w = strides[1];
+        let p_h_start = pads[0];
+        let p_w_start = pads[1];
         // let pH_end = pads[2]; // Not used explicitly in loop bounds if output dim calc is correct
         // let pW_end = pads[3]; // Not used explicitly in loop bounds if output dim calc is correct
 
@@ -693,18 +653,18 @@ void free_tensor(Tensor* tensor) {
         self.emit(&format!("int W_in = {}->shape[3];", input));
 
         // Calculate output dimensions
-        // H_out = floor((H_in + 2*pH - kH) / sH) + 1
-        // W_out = floor((W_in + 2*pW - kW) / sW) + 1
+        // H_out = floor((H_in + 2*pH - kH) / s_h) + 1
+        // W_out = floor((W_in + 2*pW - k_w) / s_w) + 1
         self.emit(&format!(
             "int H_padded = H_in + {} + {};",
-            pH_start, pads[2]
+            p_h_start, pads[2]
         ));
         self.emit(&format!(
             "int W_padded = W_in + {} + {};",
-            pW_start, pads[3]
+            p_w_start, pads[3]
         ));
-        self.emit(&format!("int H_out = (H_padded - {}) / {} + 1;", k_h, sH));
-        self.emit(&format!("int W_out = (W_padded - {}) / {} + 1;", kW, sW));
+        self.emit(&format!("int H_out = (H_padded - {}) / {} + 1;", k_h, s_h));
+        self.emit(&format!("int W_out = (W_padded - {}) / {} + 1;", k_w, s_w));
 
         // Reshape output tensor
         self.emit(&format!("int output_shape[] = {{N, C, H_out, W_out}};"));
@@ -719,10 +679,10 @@ void free_tensor(Tensor* tensor) {
         self.emit("for (int w_out = 0; w_out < W_out; w_out++) {");
         self.indent();
 
-        self.emit(&format!("int h_start = h_out * {} - {};", sH, pH_start));
-        self.emit(&format!("int w_start = w_out * {} - {};", sW, pW_start));
+        self.emit(&format!("int h_start = h_out * {} - {};", s_h, p_h_start));
+        self.emit(&format!("int w_start = w_out * {} - {};", s_w, p_w_start));
         self.emit(&format!("int h_end = h_start + {};", k_h));
-        self.emit(&format!("int w_end = w_start + {};", kW));
+        self.emit(&format!("int w_end = w_start + {};", k_w));
 
         self.emit("float max_val = -FLT_MAX;"); // Initialize with a very small number
 
@@ -1164,6 +1124,7 @@ void free_tensor(Tensor* tensor) {
         self.emit("");
     }
 
+    #[allow(dead_code)]
     fn gen_add(&mut self, node: Node, _graph: Graph) {
         let input1 = Self::clean_name(&node.inputs[0]);
         let input2 = Self::clean_name(&node.inputs[1]);
@@ -1242,51 +1203,9 @@ void free_tensor(Tensor* tensor) {
     }
 
     fn gen_helpers(&mut self) {
-        self.emit(Self::helper_init_tensor().as_str());
-        self.emit(Self::helper_free_tensor().as_str());
-        self.emit(Self::helper_reshape_tensor().as_str());
-    }
-
-    fn helper_reshape_tensor() -> String {
-        let mut code = String::new();
-        code.push_str(
-            r###"
-void reshape_tensor(Tensor* tensor, int ndim, const int* shape_values) {
-    int size = 1;
-    for (int i = 0; i < ndim; i++) {
-        size *= shape_values[i];
-    }
-
-    // Check if reallocation is needed
-    if (tensor->data != NULL && tensor->size == size) {
-        // Size match, update shape just in case (e.g. [1, 100] vs [100, 1])
-        if (tensor->ndim != ndim) {
-             free(tensor->shape);
-             tensor->shape = (int*)malloc(ndim * sizeof(int));
-             tensor->ndim = ndim;
-        }
-        memcpy(tensor->shape, shape_values, ndim * sizeof(int));
-        return;
-    }
-
-    if (tensor->data != NULL) {
-        free(tensor->data);
-    }
-    if (tensor->shape != NULL) {
-        free(tensor->shape);
-    }
-
-    tensor->ndim = ndim;
-    tensor->shape = (int*)malloc(ndim * sizeof(int));
-    if (tensor->shape == NULL) { exit(EXIT_FAILURE); }
-    memcpy(tensor->shape, shape_values, ndim * sizeof(int));
-    
-    tensor->size = size;
-    tensor->data = (float*)malloc(size * sizeof(float));
-    if (tensor->data == NULL) { free(tensor->shape); exit(EXIT_FAILURE); }
-}"###,
-        );
-        code
+        self.emit(runtime::helper_init_tensor());
+        self.emit(runtime::helper_free_tensor());
+        self.emit(runtime::helper_reshape_tensor());
     }
 
     fn get_attribute_float(&self, node: &Node, name: &str, default: f32) -> f32 {
@@ -1328,7 +1247,7 @@ void reshape_tensor(Tensor* tensor, int ndim, const int* shape_values) {
             .unwrap_or(default)
     }
 
-    fn clean_name(name: &str) -> String {
+    pub fn clean_name(name: &str) -> String {
         // Split '/' and take the last string,
         // Replace '.' -> '_'
         let parts: Vec<&str> = name.split('/').collect();
@@ -1336,7 +1255,7 @@ void reshape_tensor(Tensor* tensor, int ndim, const int* shape_values) {
         last_part.replace('.', "_").replace("onnx::", "")
     }
 
-    fn clean_name_num(name: &str) -> String {
+    pub fn clean_name_num(name: &str) -> String {
         // Split '/' and take the last string,
         // Replace '.' -> '_'
         let parts: Vec<&str> = name.split('/').collect();
