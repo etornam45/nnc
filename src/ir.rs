@@ -39,7 +39,11 @@ pub enum Op {
     Identity,
     MaxPool,
     GlobalAveragePool,
-    // TODO: More here 
+    Sigmoid,
+    Tanh,
+    Sqrt,
+    Exp,
+    Log,
 }
 
 

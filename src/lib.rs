@@ -96,6 +96,11 @@ fn validate_graph(graph: &ir::Graph) -> CompileResult<()> {
             | ir::Op::Identity
             | ir::Op::MaxPool
             | ir::Op::GlobalAveragePool
+            | ir::Op::Sigmoid
+            | ir::Op::Tanh
+            | ir::Op::Sqrt
+            | ir::Op::Exp
+            | ir::Op::Log
             | ir::Op::Transpose => 1,
             ir::Op::Gemm => 3,
         };
